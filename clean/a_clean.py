@@ -6,6 +6,7 @@ def clean_a(df : pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     df = clean_length(df)
+    df = clean_fuel_type(df)
     # df = kolona_klean()
 
     return df
