@@ -26,7 +26,5 @@ def split_train_test(df_all: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     df_train = df_all[df_all['_base'] == 'train'].copy()
     df_test = df_all[df_all['_base'] == 'test'].copy()
 
-    df_train = df_train.drop(columns=['_base'])
-    df_test = df_test.drop(columns=['_base'])
 
     return df_train, df_test

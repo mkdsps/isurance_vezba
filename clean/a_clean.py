@@ -1,10 +1,11 @@
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 import numpy as np
+from utils import split_train_test
 def clean_a(df : pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    df = dummy_clean(df)
+    df = clean_length(df)
     # df = kolona_klean()
 
     return df
@@ -20,40 +21,54 @@ def dummy_clean(df : pd.DataFrame) -> pd.DataFrame:
 def clean_length(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # 1. Trening skup (gde imamo i Length i Weight)
-    train_df = df[df["Length"].notna() & df["Weight"].notna()]
+    # 1. split na train i test (koristi util funkciju)
+    df_train, df_test = split_train_test(df)
 
-    if len(train_df) == 0:
-        return df  # nema na čemu da trenira
+    # -------------------------
+    # 2. mapa iz TRAIN-a
+    # -------------------------
+    weight_to_length = (
+        df_train[df_train["Length"].notna() & df_train["Weight"].notna()]
+        .groupby("Weight")["Length"]
+        .median()
+    )
 
-    X_train = train_df[["Weight"]]
-    y_train = train_df["Length"]
+    # -------------------------
+    # 3. exact match fill
+    # -------------------------
+    train_mask = df_train["Length"].isna() & df_train["Weight"].notna()
+    test_mask = df_test["Length"].isna() & df_test["Weight"].notna()
 
-    # 2. Treniraj model
-    model = LinearRegression()
-    model.fit(X_train, y_train)
+    df_train.loc[train_mask, "Length"] = df_train.loc[train_mask, "Weight"].map(weight_to_length)
+    df_test.loc[test_mask, "Length"] = df_test.loc[test_mask, "Weight"].map(weight_to_length)
 
-    # 3. Nađi gde fali Length (ali imamo Weight)
-    missing_mask = df["Length"].isna() & df["Weight"].notna()
+    # -------------------------
+    # 4. linearna regresija (fit samo na train)
+    # -------------------------
+    train_model_df = df_train[df_train["Length"].notna() & df_train["Weight"].notna()]
 
-    if missing_mask.sum() == 0:
-        return df  # nema šta da se popunjava
+    if not train_model_df.empty:
+        X_train = train_model_df[["Weight"]]
+        y_train = train_model_df["Length"]
 
-    X_missing = df.loc[missing_mask, ["Weight"]]
+        model = LinearRegression()
+        model.fit(X_train, y_train)
 
-    # 4. Predikcija
-    predicted_length = model.predict(X_missing)
+        # fallback train
+        train_pred_mask = df_train["Length"].isna() & df_train["Weight"].notna()
+        if train_pred_mask.any():
+            X_missing = df_train.loc[train_pred_mask, ["Weight"]]
+            df_train.loc[train_pred_mask, "Length"] = model.predict(X_missing)
 
-    # 5. Popuni nazad
-    df.loc[missing_mask, "Length"] = predicted_length
+        # fallback test
+        test_pred_mask = df_test["Length"].isna() & df_test["Weight"].notna()
+        if test_pred_mask.any():
+            X_missing = df_test.loc[test_pred_mask, ["Weight"]]
+            df_test.loc[test_pred_mask, "Length"] = model.predict(X_missing)
 
-    return df
+    # -------------------------
+    # 5. vrati nazad u jedan df
+    # -------------------------
+    df_all = pd.concat([df_train, df_test], axis=0, ignore_index=True)
 
-
-df = pd.read_csv('../data/Motor vehicle insurance data.csv',sep=';')
-
-df = clean_length(df)
-
-df['log_premium'] = np.log1p(df['Premium'])
-df['Length_Power'] = df['Length'] * df['Power']
-print(df[['Length_Power','log_premium']].corr())
+    return df_all

@@ -1,7 +1,7 @@
 import pandas as pd
-from i_features import features_i
-from a_features import features_a
-from v_features import features_v
+from .i_features import features_i
+from .a_features import features_a
+from .v_features import features_v
 
 def features_all(df: pd.DataFrame) -> pd.DataFrame:
     """
