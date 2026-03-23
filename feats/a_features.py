@@ -4,6 +4,13 @@ def features_a(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df['Length_Power'] = df['Length'] * df['Power']
     df['log_Premium'] = np.log1p(df['Premium'])
+    df['power_weight'] = df['Power'] / df['Weight']
+    df['cyl_per_door'] = df['Cylinder_capacity'] / df['N_doors']
+    df['value_per_power'] = df['Value_vehicle'] / df['Power']
+    df['is_diesel'] = (df['Type_fuel'] == 'D').astype(int)
+    df['diesel_power'] = df['is_diesel'] * df['Power']
+
+    print(df[['power_weight', 'cyl_per_door', 'value_per_power']].head())
     #df = dummy_features(df)
     # df = neka_feature_i(df)
 

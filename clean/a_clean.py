@@ -11,10 +11,20 @@ def clean_a(df : pd.DataFrame) -> pd.DataFrame:
     return df
     
 
-def dummy_clean(df : pd.DataFrame) -> pd.DataFrame:
-    """
-        odvoji po kolonama ove dummy funk...
-    """
+def clean_fuel_type(df : pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    median_cyl_D = df[df['Type_fuel']=='D']['Cylinder_capacity'].median()
+    median_cyl_P = df[df['Type_fuel']=='P']['Cylinder_capacity'].median()
+
+    def fill_fuel(row):
+        if pd.isna(row['Type_fuel']):
+            if row['Cylinder_capacity'] > (median_cyl_D + median_cyl_P)/2:
+                return 'D'
+            else:
+                return 'P'
+        return row['Type_fuel']
+
+    df['Type_fuel'] = df.apply(fill_fuel, axis=1)
     
     return df
 
