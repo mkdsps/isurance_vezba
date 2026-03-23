@@ -29,7 +29,7 @@ print("=-" * 15)
 train_final, test_final = split_train_test(df_final)
 target = 'log_Premium'
 
-dropped_collumns = [target,'Date_lapse','Type_fuel','Premium','Cost_claims_year','N_claims_year','ID']
+dropped_collumns = [target,'Date_lapse','Type_fuel','Premium','Cost_claims_year','N_claims_year','ID','Date_next_renewal', 'Date_last_renewal']
 
 X = train_final.drop(columns=dropped_collumns)
 y = train_final[target]
@@ -42,7 +42,7 @@ X_train, X_val, y_train, y_val = train_test_split(X,y,train_size=0.95,shuffle=Tr
 
 # finalni model na celom train-u
 model_with_val = CatBoostRegressor(
-    iterations=3000,
+    iterations=1500,
     learning_rate=0.02,
     depth=8,
     l2_leaf_reg=7,

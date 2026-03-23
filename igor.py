@@ -16,40 +16,6 @@ print(df_all.shape)
 
 # %%
 
-def analiziraj_promene_po_id(df):
-    konstantne_kolone = []
-    promenljive_kolone = []
-    
-    # Izbacujemo ID iz provere jer po njemu grupišemo
-    sve_kolone = [col for col in df.columns if col != 'ID']
-    
-    for col in sve_kolone:
-        # Brojimo unikatne vrednosti po svakom ID-u
-        # .max() nam kaže koliki je najveći broj promena zabeležen za bilo koji ID
-        maksimalno_unikatnih = df.groupby('ID')[col].nunique().max()
-        
-        if maksimalno_unikatnih == 1:
-            konstantne_kolone.append(col)
-        else:
-            promenljive_kolone.append(col)
-            
-    return konstantne_kolone, promenljive_kolone
-
-# Izvršavanje
-konst, prom = analiziraj_promene_po_id(df_all)
-
-print("--- STATIČNE KOLONE (Nikada se ne menjaju za isti ID) ---")
-for k in konst:
-    print(f"✅ {k}")
-
-print("\n--- DINAMIČNE KOLONE (Menjaju se kroz istoriju ID-a) ---")
-for p in prom:
-    print(f"🔄 {p}")
-
-
-
-# %%
-
 def daj_prethodne_polise_po_datumu(df, klijent_id, date_last_renewal):
     # 1. Filtriramo samo redove za taj ID
     grupa = df[df['ID'] == klijent_id].copy()
@@ -70,31 +36,90 @@ istorija = daj_prethodne_polise_po_datumu(df_all, 1 , '05/11/2017')
 print(istorija)
 
 
-
 # %%
-import seaborn as sns
-import matplotlib.pyplot as plt
+
+import pandas as pd
 import numpy as np
 
-def prikazi_histo_log(df, kolona, bins=30, po_kategoriji=None):
-    plt.figure(figsize=(10, 6))
-    
-    # Primenjujemo log nad podacima iz kolone, ne nad imenom kolone
-    # Koristimo np.log1p (što je log(1+x)) da izbegnemo grešku sa nulama
-    podaci_log = np.log1p(df[kolona])
-    
-    # Kreiranje histograma
-    sns.histplot(data=df, x=podaci_log, bins=bins, kde=True, hue=po_kategoriji, palette="viridis")
-    
-    plt.title(f'Log-Histogram kolone: {kolona}')
-    plt.xlabel(f'log({kolona})')
-    plt.ylabel('Broj zapisa (Frekvencija)')
-    
-    # Čuvanje slike
-    plt.savefig('../premium_histo_log.png')
-    plt.show()
+import pandas as pd
+import numpy as np
 
-# Poziv funkcije
-prikazi_histo_log(df_all, 'Premium')
+def izracunaj_istorijske_metrike(df : pd.DataFrame) -> pd.DataFrame:
+
+    df = df.copy()
+    # 1. Datum i Sortiranje (Kritično zbog dayfirst)
+    df['Date_next_renewal'] = pd.to_datetime(df['Date_next_renewal'], dayfirst=True)
+    df = df.sort_values(['ID', 'Date_next_renewal']).reset_index(drop=True)
+    
+    # 2. Logaritmovanje premije
+    df['log_P'] = np.log1p(df['Premium'])
+    
+    # 3. Broj prethodnih (jednostavan cumcount)
+    df['broj_prethodnih_semplova'] = df.groupby('ID').cumcount()
+    
+    # 4. Istorijske metrike - koristimo transformaciju da očuvamo indeks
+    shiftovano = df.groupby('ID')['log_P'].shift(1)
+    
+    # Expanding funkcije bez komplikovanja sa MultiIndex-om
+    df['max_prethodni'] = df.groupby('ID')['log_P'].shift(1).groupby(df['ID']).expanding().max().values
+    df['min_prethodni'] = df.groupby('ID')['log_P'].shift(1).groupby(df['ID']).expanding().min().values
+    df['mean_prethodni'] = df.groupby('ID')['log_P'].shift(1).groupby(df['ID']).expanding().mean().values
+    
+    # 5. Tvoji specifični zahtevi
+    df['ima_prethodni'] = df['broj_prethodnih_semplova'] > 0
+    df['cena_direktno_prethodne'] = shiftovano
+    
+    # mean_prethodni / broj_prethodnih_semplova
+    df['mean_kroz_broj'] = np.where(
+        df['broj_prethodnih_semplova'] > 0, 
+        df['mean_prethodni'] / df['broj_prethodnih_semplova'], 
+        0
+    )
+    
+    # 6. Popunjavanje NaN u nule (za prve polise klijenata)
+    kolone_fill = ['max_prethodni', 'min_prethodni', 'mean_prethodni', 'cena_direktno_prethodne']
+    df[kolone_fill] = df[kolone_fill].fillna(0)
+   
+
+    return df.drop(['log_P'], axis=1) 
+
+
+
+df_added_features = izracunaj_istorijske_metrike(df_all)
+# %%
+
+print(df_added_features[df_added_features["ID"] == 1][['max_prethodni', 'min_prethodni', 'mean_prethodni', 'cena_direktno_prethodne', 'broj_prethodnih_semplova', 'ima_prethodni']])
+
+
+# %%
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# 1. Filtriramo podatke: Uzimamo samo redove gde klijent IMA istoriju
+df_sa_istorijom = df_added_features[df_added_features['ima_prethodni'] == True].copy()
+
+# 2. Definišemo kolone za korelaciju
+istorijske_kolone = [
+    'max_prethodni', 'min_prethodni', 'mean_prethodni', 
+    'cena_direktno_prethodne', 'broj_prethodnih_semplova', 
+    'mean_kroz_broj', 'log_P'
+]
+
+# 3. Kreiramo heatmap
+plt.figure(figsize=(10, 8))
+corr_matrix_sub = df_sa_istorijom[istorijske_kolone].corr()
+
+sns.heatmap(corr_matrix_sub, annot=True, cmap='coolwarm', fmt=".2f")
+
+plt.title('Korelacija: SAMO za klijente sa prethodnim polisama')
+plt.savefig('../korelacija_segmentirano.png')
+plt.show()
+
+# Ispisujemo informaciju koliko je redova ostalo nakon filtriranja
+print(f"Broj redova sa istorijom: {len(df_sa_istorijom)}")
+print(f"Procenat baze sa istorijom: {len(df_sa_istorijom)/len(df_all)*100:.2f}%")
+
+
 
 # %%

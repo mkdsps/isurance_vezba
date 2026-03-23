@@ -10,8 +10,8 @@ def features_all(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
 
-    df = features_i(df)
     df = features_a(df)
+    df = features_i(df)
     df = features_v(df)
 
     return df
