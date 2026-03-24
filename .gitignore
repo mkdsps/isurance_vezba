@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 venv/
 env/
+catboost_info/
+feature_importance_results.csv
+*.tsv
+*.tfevents
