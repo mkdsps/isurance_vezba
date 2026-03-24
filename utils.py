@@ -28,3 +28,6 @@ def split_train_test(df_all: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
     return df_train, df_test
+
+if __name__ == "__main__":
+    main()
