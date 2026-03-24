@@ -36,9 +36,6 @@ dropped_collumns = [
     "Premium",
     "Cost_claims_year",
     "N_claims_year",
-    "ID",
-    "Date_next_renewal",
-    "Date_last_renewal",
     "_base",
 ]
 # izvadio sam Type_fuel i max_products....
