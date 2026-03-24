@@ -12,7 +12,7 @@ def features_i(df: pd.DataFrame) -> pd.DataFrame:
 def izracunaj_istorijske_metrike(df : pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     # 1. Datum i Sortiranje (Kritično zbog dayfirst)
-    df['Date_next_renewal'] = pd.to_datetime(df['Date_next_renewal'], dayfirst=True)
+    df['Date_next_renewal'] = pd.to_datetime(df['Date_next_renewal'], dayfirst=True, format = 'mixed')
     df = df.sort_values(['ID', 'Date_next_renewal']).reset_index(drop=True)
     
     # 2. Logaritmovanje premije
