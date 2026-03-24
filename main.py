@@ -9,8 +9,8 @@ from catboost import CatBoostRegressor, Pool
 from utils import merge_train_test, split_train_test
 # load data...
 
-df_train = pd.read_csv('data/train.csv')
-df_test  = pd.read_csv('data/test.csv')
+df_train = pd.read_csv('data/new_train.csv')
+df_test  = pd.read_csv('data/new_test.csv')
 
 df_all = merge_train_test(df_train, df_test)
 print(df_all.columns)
@@ -27,6 +27,7 @@ print("=-" * 15)
 
 # PRIPREMI ZA MODEL....
 train_final, test_final = split_train_test(df_final)
+
 target = 'log_Premium'
 
 dropped_collumns = [target,'Date_lapse','Premium','Cost_claims_year','N_claims_year','ID','Date_next_renewal', 'Date_last_renewal','_base']
