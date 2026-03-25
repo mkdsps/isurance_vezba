@@ -1,0 +1,14 @@
+feature,importance,safe_to_remove
+Second_driver,1.3924404158360835,False
+Length_Power,1.2523050403766312,True
+Weight,1.0879459686740627,False
+Length,1.0095157307898854,False
+Lapse,0.9117784119720735,True
+N_claims_history,0.729538797448237,False
+Distribution_channel,0.6721352441550156,False
+Area,0.6666376616188923,False
+Max_policies,0.5840511207580074,False
+broj_prethodnih_semplova,0.5236099780099276,False
+ima_prethodni,0.40028570612404146,False
+Max_products,0.18860357248050805,True
+Type_fuel,0.05760981567612351,False

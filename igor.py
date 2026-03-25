@@ -1,51 +1,16 @@
 # %%
 
 import pandas as pd
-
-train_df = pd.read_csv('data/train.csv')
-test_df  = pd.read_csv('data/test.csv')
-
-print(train_df.head())
-
-# %%
-
-from utils import merge_train_test
-
-df_all = merge_train_test(train_df, test_df)
-print(df_all.shape)
-
-# %%
-
-def daj_prethodne_polise_po_datumu(df, klijent_id, date_last_renewal):
-    # 1. Filtriramo samo redove za taj ID
-    grupa = df[df['ID'] == klijent_id].copy()
-    
-    # 2. Konvertujemo kolone u datetime (ako već nisu) da bi poređenje radilo ispravno
-    grupa['Date_next_renewal'] = pd.to_datetime(grupa['Date_next_renewal'])
-    date_last_renewal = pd.to_datetime(date_last_renewal)
-    
-    # 3. Tražimo polise gde je sledeća obnova bila pre ili na dan zadatog datuma
-    prethodne = grupa[grupa['Date_next_renewal'] <= date_last_renewal]
-    
-    # 4. Sortiramo hronološki radi preglednosti
-    return prethodne.sort_values(by='Date_next_renewal')
-
-# Primer korišćenja:
-# Rezultat će biti DataFrame sa svim starim polisama za tog klijenta
-istorija = daj_prethodne_polise_po_datumu(df_all, 1 , '05/11/2017')
-print(istorija)
-
-
-# %%
-
-import pandas as pd
+from sklearn.utils.fixes import tarfile_extractall
+from utils import merge_train_test, split_train_test
+from feats.features import features_all
+from clean.cleaning import clean_all
 import numpy as np
 
-import pandas as pd
-import numpy as np
+df_train = pd.read_csv('data/train.csv')
+df_test  = pd.read_csv('data/test.csv')
 
 def izracunaj_istorijske_metrike(df : pd.DataFrame) -> pd.DataFrame:
-
     df = df.copy()
     # 1. Datum i Sortiranje (Kritično zbog dayfirst)
     df['Date_next_renewal'] = pd.to_datetime(df['Date_next_renewal'], dayfirst=True)
@@ -75,6 +40,12 @@ def izracunaj_istorijske_metrike(df : pd.DataFrame) -> pd.DataFrame:
         df['mean_prethodni'] / df['broj_prethodnih_semplova'], 
         0
     )
+
+    # 1. Prvo izbrojimo koliko se svaki ID pojavljuje u celom setu
+    df['broj_pojavljivanja_id'] = df.groupby('ID')['ID'].transform('count')
+
+    # 2. Kreiramo boolean feature: True ako se pojavljuje samo jednom, False ako više puta
+    df['je_jedinstven_klijent'] = df['broj_pojavljivanja_id'] == 1
     
     # 6. Popunjavanje NaN u nule (za prve polise klijenata)
     kolone_fill = ['max_prethodni', 'min_prethodni', 'mean_prethodni', 'cena_direktno_prethodne']
@@ -83,43 +54,64 @@ def izracunaj_istorijske_metrike(df : pd.DataFrame) -> pd.DataFrame:
 
     return df.drop(['log_P'], axis=1) 
 
+df_all = merge_train_test(df_train, df_test)
+df_all_features = izracunaj_istorijske_metrike(df_all)
+
+df_train_final, df_test_final =  split_train_test(df_all_features)
 
 
-df_added_features = izracunaj_istorijske_metrike(df_all)
+print(df_train_final['ima_prethodni'].value_counts())
+print(df_test_final['ima_prethodni'].value_counts())
+
 # %%
 
-print(df_added_features[df_added_features["ID"] == 1][['max_prethodni', 'min_prethodni', 'mean_prethodni', 'cena_direktno_prethodne', 'broj_prethodnih_semplova', 'ima_prethodni']])
+test_true = df_test_final[df_test_final['ima_prethodni'] == True]
+test_false = df_test_final[df_test_final['ima_prethodni'] == False]
 
+# 2. Uzimamo tacno 10.000 nasumicnih 'True' primera za novi test
+test_true_keep = test_true.sample(n=10000, random_state=42)
 
+# 3. Sve ostale 'True' primere (višak) šaljemo u trening
+test_true_move = test_true.drop(test_true_keep.index)
+
+# 4. Spajamo novi trening i novi test
+df_train_final_new = pd.concat([df_train_final, test_true_move], axis=0).reset_index(drop=True)
+df_test_final_new = pd.concat([test_true_keep, test_false], axis=0).reset_index(drop=True)
+
+print(df_train_final_new['ima_prethodni'].value_counts())
+print(df_test_final_new['ima_prethodni'].value_counts())
 # %%
 
-import seaborn as sns
-import matplotlib.pyplot as plt
+mask_za_selidbu = (df_train_final_new['ima_prethodni'] == False) & \
+                  (df_train_final_new['je_jedinstven_klijent'] == True)
 
-# 1. Filtriramo podatke: Uzimamo samo redove gde klijent IMA istoriju
-df_sa_istorijom = df_added_features[df_added_features['ima_prethodni'] == True].copy()
+train_to_move = df_train_final_new[mask_za_selidbu]
 
-# 2. Definišemo kolone za korelaciju
-istorijske_kolone = [
-    'max_prethodni', 'min_prethodni', 'mean_prethodni', 
-    'cena_direktno_prethodne', 'broj_prethodnih_semplova', 
-    'mean_kroz_broj', 'log_P'
-]
+# 2. Uzimamo tacno 5.885 nasumicnih primera za selidbu
+move_to_test = train_to_move.sample(n=5885, random_state=42)
 
-# 3. Kreiramo heatmap
-plt.figure(figsize=(10, 8))
-corr_matrix_sub = df_sa_istorijom[istorijske_kolone].corr()
+# 3. Izbacujemo ih iz treninga
+df_train_final_v2 = df_train_final_new.drop(move_to_test.index).reset_index(drop=True)
 
-sns.heatmap(corr_matrix_sub, annot=True, cmap='coolwarm', fmt=".2f")
+# 4. Dodajemo ih u postojeci test set (onaj gde smo vec ostavili 10k starih)
+df_test_final_v2 = pd.concat([df_test_final_new, move_to_test], axis=0).reset_index(drop=True)
+print(df_train_final_v2['ima_prethodni'].value_counts())
+print(df_test_final_v2['ima_prethodni'].value_counts())
+# %%
 
-plt.title('Korelacija: SAMO za klijente sa prethodnim polisama')
-plt.savefig('../korelacija_segmentirano.png')
-plt.show()
+# Originalne kolone iz df_all pre feature engineeringa
+originalne_kolone = df_all.columns.tolist()
 
-# Ispisujemo informaciju koliko je redova ostalo nakon filtriranja
-print(f"Broj redova sa istorijom: {len(df_sa_istorijom)}")
-print(f"Procenat baze sa istorijom: {len(df_sa_istorijom)/len(df_all)*100:.2f}%")
+# Zadrži samo originalne kolone
+df_train_final_v2 = df_train_final_v2[originalne_kolone]
+df_test_final_v2  = df_test_final_v2[originalne_kolone]
 
+# Sačuvaj
+df_train_final_v2.to_csv('data/new_train.csv', index=False)
+df_test_final_v2.to_csv('data/new_test.csv', index=False)
+
+print(f"Train: {df_train_final_v2.shape}, Test: {df_test_final_v2.shape}")
+print(f"Kolone: {df_train_final_v2.columns.tolist()}")
 
 
 # %%
