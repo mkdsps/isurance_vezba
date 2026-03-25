@@ -17,6 +17,10 @@ def features_a(df: pd.DataFrame) -> pd.DataFrame:
     df['car_age'] = 2026 - df['Year_matriculation']  
     df['car_age_log'] = np.log1p(df['car_age'])
 
+    df["Date_lapse"] = pd.to_datetime(df["Date_lapse"], dayfirst=True, errors="coerce")
+    df["Date_start_contract"] = pd.to_datetime(df["Date_start_contract"], dayfirst=True, errors="coerce")
+    df["days_to_lapse"] = (df["Date_lapse"] - df["Date_start_contract"]).dt.days
+    df["days_to_lapse"] = df["days_to_lapse"].fillna(-1)
     return df
 
 

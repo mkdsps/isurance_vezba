@@ -21,7 +21,7 @@ train_final, test_final = split_train_test(df_final)
 target          = 'log_Premium'
 dropped_columns = [
     target, 'Date_lapse', 'Premium', 'Cost_claims_year',
-    'N_claims_year', 'ID', 'Date_next_renewal',
+    'N_claims_year', 'Date_next_renewal',
     'Date_last_renewal', '_base'
 ]
  
@@ -39,10 +39,10 @@ X_train, X_val, y_train, y_val = train_test_split(
 # ── 2. MODEL PARAMETRI (zajednički za sve treninge) ───────────────────────────
 MODEL_PARAMS = dict(
     iterations=3000,
-    learning_rate=0.02,
-    depth=8,
+    learning_rate=0.03,
+    depth=6,
     l2_leaf_reg=7,
-    early_stopping_rounds=100,
+    early_stopping_rounds=150,
     loss_function='MAE',
     eval_metric='MAE',
     random_seed=42,
