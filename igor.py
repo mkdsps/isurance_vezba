@@ -1,117 +1,170 @@
 # %%
-
 import pandas as pd
-from sklearn.utils.fixes import tarfile_extractall
-from utils import merge_train_test, split_train_test
-from feats.features import features_all
 from clean.cleaning import clean_all
+from feats.features import features_all
+from utils import merge_train_test, split_train_test
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.preprocessing import OrdinalEncoder
 import numpy as np
+import xgboost as xgb
+import optuna
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-df_train = pd.read_csv('data/train.csv')
-df_test  = pd.read_csv('data/test.csv')
+# load data...
+df_train = pd.read_csv("data/new_train.csv")
+df_test = pd.read_csv("data/new_test.csv")
+df_all = merge_train_test(df_train, df_test)
+df_cleaned = clean_all(df_all)
+df_final = features_all(df_cleaned)
+train_final, test_final = split_train_test(df_final)
 
-def izracunaj_istorijske_metrike(df : pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    # 1. Datum i Sortiranje (Kritično zbog dayfirst)
-    df['Date_next_renewal'] = pd.to_datetime(df['Date_next_renewal'], dayfirst=True)
-    df = df.sort_values(['ID', 'Date_next_renewal']).reset_index(drop=True)
-    
-    # 2. Logaritmovanje premije
-    df['log_P'] = np.log1p(df['Premium'])
-    
-    # 3. Broj prethodnih (jednostavan cumcount)
-    df['broj_prethodnih_semplova'] = df.groupby('ID').cumcount()
-    
-    # 4. Istorijske metrike - koristimo transformaciju da očuvamo indeks
-    shiftovano = df.groupby('ID')['log_P'].shift(1)
-    
-    # Expanding funkcije bez komplikovanja sa MultiIndex-om
-    df['max_prethodni'] = df.groupby('ID')['log_P'].shift(1).groupby(df['ID']).expanding().max().values
-    df['min_prethodni'] = df.groupby('ID')['log_P'].shift(1).groupby(df['ID']).expanding().min().values
-    df['mean_prethodni'] = df.groupby('ID')['log_P'].shift(1).groupby(df['ID']).expanding().mean().values
-    
-    # 5. Tvoji specifični zahtevi
-    df['ima_prethodni'] = df['broj_prethodnih_semplova'] > 0
-    df['cena_direktno_prethodne'] = shiftovano
-    
-    # mean_prethodni / broj_prethodnih_semplova
-    df['mean_kroz_broj'] = np.where(
-        df['broj_prethodnih_semplova'] > 0, 
-        df['mean_prethodni'] / df['broj_prethodnih_semplova'], 
-        0
+target = "log_Premium"
+dropped_collumns = [
+    target,
+    "Date_lapse",
+    "Premium",
+    "Cost_claims_year",
+    "N_claims_year",
+    "_base",
+    'client_age_sq',
+    'Length',
+    'Max_products',
+    'Type_fuel',
+    'driving_exp_sqrt',
+    'driving_exp_sq',
+    'contract_age_sqrt',
+    'contract_age_sq',
+    'client_age_sqrt',
+]
+
+X = train_final.drop(columns=dropped_collumns)
+y = train_final[target]
+X_test = test_final.drop(columns=dropped_collumns, errors="ignore")
+
+
+# ──OČISTI INF VREDNOSTI ───────────────────────────────────────────
+print("Inf vrednosti pre čišćenja:")
+print(np.isinf(X.select_dtypes(include=np.number)).sum().sum())
+
+# zameni inf sa NaN pa NaN sa median
+X = X.replace([np.inf, -np.inf], np.nan)
+X_test = X_test.replace([np.inf, -np.inf], np.nan)
+
+# popuni NaN sa medianom svake kolone
+num_cols = X.select_dtypes(include=np.number).columns
+for col in num_cols:
+    median_val = X[col].median()
+    X[col] = X[col].fillna(median_val)
+    X_test[col] = X_test[col].fillna(median_val)
+
+print("Inf vrednosti posle čišćenja:")
+print(np.isinf(X.select_dtypes(include=np.number)).sum().sum())
+
+# tek onda enkodiranje
+cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+X[cat_cols] = encoder.fit_transform(X[cat_cols])
+X_test[cat_cols] = encoder.transform(X_test[cat_cols])
+
+
+# ── ENKODIRANJE KATEGORIČKIH FEATTURA ─────────────────────────────
+cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+print(f"Kategoričke kolone: {cat_cols}")
+
+encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+X[cat_cols] = encoder.fit_transform(X[cat_cols])
+X_test[cat_cols] = encoder.transform(X_test[cat_cols])
+
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y, train_size=0.95, shuffle=True, random_state=123
+)
+
+# ── OPTUNA TUNING ──────────────────────────────────────────────────
+def objective(trial):
+    params = {
+        'n_estimators': trial.suggest_int('n_estimators', 1000, 5000),
+        'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
+        'max_depth': trial.suggest_int('max_depth', 4, 10),
+        'reg_lambda': trial.suggest_float('reg_lambda', 1, 20),
+        'reg_alpha': trial.suggest_float('reg_alpha', 0, 10),
+        'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+        'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+        'objective': 'reg:absoluteerror',  # MAE
+        'random_state': 42,
+        'tree_method': 'hist',  # brže treniranje
+        'early_stopping_rounds': 100,
+        'verbosity': 0,
+    }
+
+    model = xgb.XGBRegressor(**params)
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=False,
     )
 
-    # 1. Prvo izbrojimo koliko se svaki ID pojavljuje u celom setu
-    df['broj_pojavljivanja_id'] = df.groupby('ID')['ID'].transform('count')
+    preds = np.exp(model.predict(X_val))
+    return mean_absolute_error(np.exp(y_val), preds)
 
-    # 2. Kreiramo boolean feature: True ako se pojavljuje samo jednom, False ako više puta
-    df['je_jedinstven_klijent'] = df['broj_pojavljivanja_id'] == 1
-    
-    # 6. Popunjavanje NaN u nule (za prve polise klijenata)
-    kolone_fill = ['max_prethodni', 'min_prethodni', 'mean_prethodni', 'cena_direktno_prethodne']
-    df[kolone_fill] = df[kolone_fill].fillna(0)
-   
+print("Pokrecem Optuna pretragu...")
+study = optuna.create_study(direction='minimize')
+study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    return df.drop(['log_P'], axis=1) 
+print(f"\nNajbolji MAE (val): {study.best_value:.4f}")
+print(f"Najbolji parametri: {study.best_params}")
 
-df_all = merge_train_test(df_train, df_test)
-df_all_features = izracunaj_istorijske_metrike(df_all)
+# ── FINALNI MODEL ──────────────────────────────────────────────────
+best_params = study.best_params
+best_params.update({
+    'objective': 'reg:absoluteerror',
+    'random_state': 42,
+    'tree_method': 'hist',
+    'early_stopping_rounds': 100,
+    'verbosity': 1,
+})
 
-df_train_final, df_test_final =  split_train_test(df_all_features)
+model_xgb = xgb.XGBRegressor(**best_params)
+model_xgb.fit(
+    X_train, y_train,
+    eval_set=[(X_val, y_val)],
+    verbose=100,
+)
 
+# ── METRIKE ────────────────────────────────────────────────────────
+test_preds = model_xgb.predict(X_test)
+y_test = test_final["Premium"]
 
-print(df_train_final['ima_prethodni'].value_counts())
-print(df_test_final['ima_prethodni'].value_counts())
+mae_test = mean_absolute_error(y_test, np.exp(test_preds))
+r2_test = r2_score(y_test, np.exp(test_preds))
+print(f"\nTest MAE: {mae_test:.4f}")
+print(f"Test R2:  {r2_test:.4f}")
 
-# %%
+# ── POJEDINACNE METRIKE ────────────────────────────────────────────
+test_final['preds_original'] = np.exp(test_preds)
+test_final['actual_original'] = test_final['Premium']
 
-test_true = df_test_final[df_test_final['ima_prethodni'] == True]
-test_false = df_test_final[df_test_final['ima_prethodni'] == False]
+sa_istorijom = test_final[test_final['ima_prethodni'] == True]
+bez_istorije = test_final[test_final['ima_prethodni'] == False]
 
-# 2. Uzimamo tacno 10.000 nasumicnih 'True' primera za novi test
-test_true_keep = test_true.sample(n=10000, random_state=42)
+if not sa_istorijom.empty:
+    print(f"\n--- KLIJENTI SA ISTORIJOM (n={len(sa_istorijom)}) ---")
+    print(f"MAE: {mean_absolute_error(sa_istorijom['actual_original'], sa_istorijom['preds_original']):.2f}")
+    print(f"R2 : {r2_score(sa_istorijom['actual_original'], sa_istorijom['preds_original']):.4f}")
 
-# 3. Sve ostale 'True' primere (višak) šaljemo u trening
-test_true_move = test_true.drop(test_true_keep.index)
+if not bez_istorije.empty:
+    print(f"\n--- NOVI KLIJENTI BEZ ISTORIJE (n={len(bez_istorije)}) ---")
+    print(f"MAE: {mean_absolute_error(bez_istorije['actual_original'], bez_istorije['preds_original']):.2f}")
+    print(f"R2 : {r2_score(bez_istorije['actual_original'], bez_istorije['preds_original']):.4f}")
 
-# 4. Spajamo novi trening i novi test
-df_train_final_new = pd.concat([df_train_final, test_true_move], axis=0).reset_index(drop=True)
-df_test_final_new = pd.concat([test_true_keep, test_false], axis=0).reset_index(drop=True)
+# ── FEATURE IMPORTANCE ─────────────────────────────────────────────
+importance_df = pd.DataFrame({
+    'feature': X.columns,
+    'importance': model_xgb.feature_importances_
+}).sort_values('importance', ascending=False)
 
-print(df_train_final_new['ima_prethodni'].value_counts())
-print(df_test_final_new['ima_prethodni'].value_counts())
-# %%
-
-mask_za_selidbu = (df_train_final_new['ima_prethodni'] == False) & \
-                  (df_train_final_new['je_jedinstven_klijent'] == True)
-
-train_to_move = df_train_final_new[mask_za_selidbu]
-
-# 2. Uzimamo tacno 5.885 nasumicnih primera za selidbu
-move_to_test = train_to_move.sample(n=5885, random_state=42)
-
-# 3. Izbacujemo ih iz treninga
-df_train_final_v2 = df_train_final_new.drop(move_to_test.index).reset_index(drop=True)
-
-# 4. Dodajemo ih u postojeci test set (onaj gde smo vec ostavili 10k starih)
-df_test_final_v2 = pd.concat([df_test_final_new, move_to_test], axis=0).reset_index(drop=True)
-print(df_train_final_v2['ima_prethodni'].value_counts())
-print(df_test_final_v2['ima_prethodni'].value_counts())
-# %%
-
-# Originalne kolone iz df_all pre feature engineeringa
-originalne_kolone = df_all.columns.tolist()
-
-# Zadrži samo originalne kolone
-df_train_final_v2 = df_train_final_v2[originalne_kolone]
-df_test_final_v2  = df_test_final_v2[originalne_kolone]
-
-# Sačuvaj
-df_train_final_v2.to_csv('data/new_train.csv', index=False)
-df_test_final_v2.to_csv('data/new_test.csv', index=False)
-
-print(f"Train: {df_train_final_v2.shape}, Test: {df_test_final_v2.shape}")
-print(f"Kolone: {df_train_final_v2.columns.tolist()}")
-
-
+importance_df.to_csv("feature_importance_xgb.csv", index=False)
+print("\nTop 20 najbitnijih featura:")
+print(importance_df.head(20).to_string())
 # %%
